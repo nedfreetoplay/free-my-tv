@@ -1,5 +1,8 @@
 package io.freemytv;
 
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.List;
 import java.util.Locale;
 import java.util.TimeZone;
 import java.util.regex.Matcher;
@@ -7,15 +10,16 @@ import java.util.regex.Pattern;
 
 /**
  * The weather from yandex.ru/pogoda, the page the site renders for a browser: the "Сейчас" block for the current
- * temperature and sky, and the hourly strip for the next hours.
+ * temperature and sky, the hourly strip for the next hours, and the ten-day strip for the next days.
  *
  * Open-Meteo (what this app used before) is unreachable on Russian ISPs: api.open-meteo.com times out from the TV
  * while every other host answers, and Yandex's own JSON API (api.weather.yandex.ru) needs a key. The page itself is
  * served without one, so this reads it: the numbers sit in elements whose class names start with the block name
  * (AppFactTemperature_value, AppHourlyItem_main…), and the sky is the Russian word from the hidden text for readers.
  *
- * The page writes its clock times in the timezone it guesses from the viewer's address (Moscow, for a TV), so the
- * hours are taken from their "…Z" timestamps instead, and sunrise/sunset are computed from the coordinates.
+ * The clock in the hourly strip is the city's own time (the page writes "09:00" for the 9th hour there, whatever the
+ * viewer's timezone), which is the TV's when the TV is set to its own city; sunrise and sunset, which the page leaves
+ * to the viewer's, are computed from the coordinates instead.
  */
 final class YandexWeather {
     private YandexWeather() {}
@@ -33,7 +37,13 @@ final class YandexWeather {
     private static final Pattern HOUR_TIME = Pattern.compile("<time[^>]*>([^<]+)</time>");
     private static final Pattern HOUR_TEMP = Pattern.compile("AppHourlyItem_main__[^\"]*\"[^>]*>([^<]+)<");
     private static final Pattern HOUR_SKY = Pattern.compile("°,\\s*([^,<]{1,40}),");
+    /** The ten-day strip: each card is one day, the first two numbers its high and the night's low. */
+    private static final String SHORT_DAY = "AppShortForecastDay_container__";
     private static final Pattern SHORT_TEMP = Pattern.compile("AppShortForecastDay_temperature__[^\"]*\"[^>]*>([^<]+)<");
+    /** The same days in words ("дождь со снегом"), morning, day and evening, in the detailed forecast below. */
+    private static final String FORECAST_DAY = "AppForecastDay_container__";
+    private static final Pattern DAY_TEXT = Pattern.compile("grid-area:d-text\"[^>]*>([^<]+)<");
+    private static final Pattern MORNING_TEXT = Pattern.compile("grid-area:m-text\"[^>]*>([^<]+)<");
     private static final Pattern NUMBER = Pattern.compile("(\\d+)");
 
     static HomeData.Weather parse(String html, String latitude, String longitude) {
@@ -48,10 +58,12 @@ final class YandexWeather {
             if (!Double.isNaN(t)) w.temp = t;
         }
 
-        // Today's high and low: the first card of the ten-day strip ("Сегодня": the day's high, then the night's low).
-        int card = html.indexOf("AppShortForecastDay_container__");
-        if (card >= 0) {
-            Matcher high = SHORT_TEMP.matcher(html.substring(card, Math.min(html.length(), card + 1500)));
+        // One card per day from today on, and the detailed blocks in the same order.
+        List<String> strip = blocks(html, SHORT_DAY, 1500, 10);
+        List<String> detail = blocks(html, FORECAST_DAY, 6000, 10);
+        // Today's high and low: the first card ("Сегодня": the day's high, then the night's low).
+        if (!strip.isEmpty()) {
+            Matcher high = SHORT_TEMP.matcher(strip.get(0));
             if (high.find()) w.max = number(high.group(1));
             if (high.find()) w.min = number(high.group(1));
         }
@@ -83,7 +95,56 @@ final class YandexWeather {
             w.hourDay.add(!lit || (at >= w.sunrise && at < w.sunset));
         }
         if (w.code < 0) w.code = w.hourCode.isEmpty() ? 0 : w.hourCode.get(0);
+
+        // The next 5 days, from tomorrow: the strip has their high and low, the detail block their sky in words.
+        for (int i = 1; i < strip.size() && w.days.size() < 5; i++) {
+            Matcher temp = SHORT_TEMP.matcher(strip.get(i));
+            if (!temp.find()) break;                       // the page's empty cards after the ten days
+            double high = number(temp.group(1));
+            double low = temp.find() ? number(temp.group(1)) : Double.NaN;
+            if (Double.isNaN(high) && Double.isNaN(low)) break;
+            w.days.add(noon(i));
+            w.dayMax.add(high);
+            w.dayMin.add(low);
+            w.dayCode.add(i < detail.size() ? code(dayText(detail.get(i))) : -1);
+        }
         return w;
+    }
+
+    /** The words for the day: the afternoon's, else the morning's ("облачно с прояснениями"). */
+    private static String dayText(String block) {
+        for (Pattern p : new Pattern[] {DAY_TEXT, MORNING_TEXT}) {
+            Matcher m = p.matcher(block);
+            if (m.find()) return m.group(1);
+        }
+        return "";
+    }
+
+    /**
+     * The blocks of a repeated element: each one runs to the next one, at most `cap` characters (the page holds the
+     * same ten cards twice, once for phones, and a longer block isn't needed past its first fields).
+     */
+    private static List<String> blocks(String html, String marker, int cap, int limit) {
+        List<String> out = new ArrayList<>();
+        int at = html.indexOf(marker);
+        while (at >= 0 && out.size() < limit) {
+            int next = html.indexOf(marker, at + marker.length());
+            int end = Math.min(html.length(), Math.min(at + cap, next < 0 ? html.length() : next));
+            out.add(html.substring(at, end));
+            at = next;
+        }
+        return out;
+    }
+
+    /** Noon of the day `ahead` days from today, on the TV's clock: the weekday is named right in any timezone. */
+    private static long noon(int ahead) {
+        Calendar c = Calendar.getInstance();
+        c.add(Calendar.DAY_OF_YEAR, ahead);
+        c.set(Calendar.HOUR_OF_DAY, 12);
+        c.set(Calendar.MINUTE, 0);
+        c.set(Calendar.SECOND, 0);
+        c.set(Calendar.MILLISECOND, 0);
+        return c.getTimeInMillis();
     }
 
     /**
