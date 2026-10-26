@@ -140,6 +140,7 @@ final class HomeApps {
             "com.smartdevice.livetv", "com.mediatek.tv.oneworld.tvcenter", "com.amazon.tv.livetv", "com.amazon.mediatek.livetv"};
     /** Kept out of "All Apps" (only hidden, still installed). Add the ones your TV shows that you never use. */
     private static final Set<String> HIDDEN = new HashSet<>(java.util.Arrays.asList(
+            "com.yandex.tv.home",                   // Yandex: the stock home screen ("Я.ТВ Домашнее Приложение")
             "com.google.android.play.games",        // Google Play Games
             "com.tcl.t_solo",                       // TCL: T-Solo
             "com.tcl.waterfall.overseas",           // TCL Channel
