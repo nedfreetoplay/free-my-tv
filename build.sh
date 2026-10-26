@@ -129,9 +129,11 @@ EOF
     "${JAVA_HOME:+$JAVA_HOME/bin/}java" out/FixAssets.java out/base.apk
     ;;
 esac
-# On Windows javac separates paths with ";", and d8 and apksigner are .bat files.
-CPSEP=:; BAT=; case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) CPSEP=";"; BAT=.bat ;; esac
-"$JAVAC" -nowarn -Xlint:-options -source 8 -target 8 -bootclasspath "$AJ$CPSEP$BT/core-lambda-stubs.jar" -classpath "$AJ" \
+# On Windows d8 and apksigner are .bat files.
+BAT=; case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) BAT=.bat ;; esac
+# android.jar on the bootclasspath hides LambdaMetafactory (it is only in core-lambda-stubs.jar):
+# keep the stubs alone there and put android.jar on the classpath.
+"$JAVAC" -nowarn -Xlint:-options -source 8 -target 8 -bootclasspath "$BT/core-lambda-stubs.jar" -classpath "$AJ" \
   -encoding UTF-8 -d out/classes $(find app/src out/gen -name '*.java')
 "$BT/d8$BAT" --release --min-api 26 --lib "$AJ" --output out $(find out/classes -name '*.class')
 if command -v zip >/dev/null; then (cd out && zip -qj base.apk classes.dex)
